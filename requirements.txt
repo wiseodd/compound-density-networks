@@ -1,0 +1,16 @@
+cleverhans==2.1.0
+Keras==2.2.4
+Keras-Applications==1.0.6
+Keras-Preprocessing==1.0.5
+matplotlib==2.2.3
+numpy==1.14.5
+scikit-image==0.14.1
+scikit-learn==0.19.1
+scipy==1.0.0
+tensorboard==1.10.0
+tensorflow-gpu==1.10.1
+torch==1.0.0
+torchtext==0.2.1
+torchvision==0.2.1
+tqdm==4.19.4
+foolbox
