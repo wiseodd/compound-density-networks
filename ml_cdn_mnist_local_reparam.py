@@ -26,7 +26,7 @@ parser.add_argument('--train_samples', type=int, default=1)
 parser.add_argument('--n_samples', type=int, default=100)
 parser.add_argument('--lr', type=float, default=1e-3)
 parser.add_argument('--wd', type=float, default=0)
-parser.add_argument('--lam', type=float, default=1e-7)
+parser.add_argument('--lam', type=float, default=1e-5)
 parser.add_argument('--n_hidden', type=int, default=100)
 parser.add_argument('--n_hidden_hypernet', type=int, default=50)
 parser.add_argument('--batch_size', type=int, default=200)
@@ -45,20 +45,31 @@ name = 'mlcdn'
 if args.use_dropout:
     name = 'dropout'
 
-os.makedirs('./results/fmnist', exist_ok=True)
-os.makedirs('./models/fmnist', exist_ok=True)
+os.makedirs('./results/mnist', exist_ok=True)
+os.makedirs('./models/mnist', exist_ok=True)
 
 # Load training data
-fmnist = input_data.read_data_sets('FMNIST_data', one_hot=False)
+mnist = input_data.read_data_sets('MNIST_data', one_hot=False)
 
-N_train = fmnist.train.images.shape[0]
-X_valid = torch.from_numpy(fmnist.validation.images).cuda()
-t_valid = fmnist.validation.labels
+N_train = mnist.train.images.shape[0]
+X_valid = torch.from_numpy(mnist.validation.images).cuda()
+t_valid = mnist.validation.labels
+
+
+def matrix_diag(diagonal):
+    N = diagonal.shape[-1]
+    shape = diagonal.shape[:-1] + (N, N)
+    device, dtype = diagonal.device, diagonal.dtype
+    result = torch.zeros(shape, dtype=dtype, device=device)
+    indices = torch.arange(result.numel(), device=device).reshape(shape)
+    indices = indices.diagonal(dim1=-2, dim2=-1)
+    result.view(-1)[indices] = diagonal
+    return result
 
 
 class ProbHypernet(nn.Module):
 
-    def __init__(self, in_dim, out_dim, h_dim=100):
+    def __init__(self, in_dim, out_dim, h_dim=50):
         super(ProbHypernet, self).__init__()
 
         self.in_dim = in_dim + 1
@@ -79,12 +90,12 @@ class ProbHypernet(nn.Module):
         self.fc_hlogvar_out = nn.Linear(h_dim, out_dim)
         nn.init.uniform_(self.fc_hlogvar_out.weight, -0.0001, 0.0001)
 
-
     def forward(self, x, output_weight_params=False):
         m = x.shape[0]
         r, c = self.in_dim, self.out_dim
 
-        h = F.relu(self.fc_xh(x))
+        h = self.fc_xh(x)
+        h = F.relu(h)
         mu_scaling = self.fc_hmu(h)
         logvar_r = self.fc_hlogvar_in(h)
         logvar_c = self.fc_hlogvar_out(h)
@@ -95,11 +106,6 @@ class ProbHypernet(nn.Module):
         var_r = torch.exp(logvar_r)
         var_c = torch.exp(logvar_c)
 
-        E = torch.randn(m, r, c, device='cuda')
-
-        # Reparametrization trick
-        W = M + torch.sqrt(var_r).view(m, r, 1) * E * torch.sqrt(var_c).view(m, 1, c)
-
         # KL divergence to prior MVN(0, I, I)
         D_KL = torch.mean(
              1/2 * (torch.sum(var_r, 1)*torch.sum(var_c, 1) \
@@ -108,7 +114,16 @@ class ProbHypernet(nn.Module):
         )
 
         x = torch.cat([x, torch.ones(m, 1, device='cuda')], 1)
-        h = torch.bmm(x.unsqueeze(1), W).squeeze()
+        x_ = x.unsqueeze(1)
+
+        # Recall MN(M, U, V) <=> N(M, V \otimes U).
+        # Here, M is (m, c), U is (m, 1, 1),  V is (m, c, c) => we have N(M, U*V) where the multiplication is componentwise.
+        mean_h = torch.bmm(x_, M).squeeze()
+        XRX = torch.bmm(x_ * var_r.unsqueeze(1), x_.transpose(1, 2)).squeeze()
+        var_h = XRX.unsqueeze(-1) * var_c
+
+        eps = torch.randn(m, c, device='cuda')
+        h = mean_h + eps * var_h
 
         if output_weight_params:
             return h, D_KL, (M, var_r, var_c)
@@ -139,11 +154,9 @@ class Model(nn.Module):
             return (y, D_KL1+D_KL2) if self.training else y
         else:
             h = F.relu(self.fc_xh(X))
-
-            if self.use_dropout:
-                h = F.dropout(h, p=0.5, training=True)
-
+            h = F.dropout(h, p=0.5, training=True)
             y = self.fc_hy(h)
+
             return y
 
     def get_weight_params(self, X):
@@ -166,7 +179,7 @@ def validate(m=args.batch_size):
 
 
 """ Training """
-N = fmnist.train.labels.shape[0]
+N = mnist.train.labels.shape[0]
 S = args.train_samples
 m = args.batch_size
 lr = args.lr
@@ -179,13 +192,13 @@ print(f'Parameter count: {np.sum([value.numel() for value in model.parameters()]
 
 
 if args.load:
-    model.load_state_dict(torch.load(f'models/fmnist/model_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{args.lam}_{S}.bin'))
+    model.load_state_dict(torch.load(f'models/mnist/model_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{args.lam}_{S}.bin'))
 else:
     opt = optim.Adam(model.parameters(), lr, weight_decay=args.wd)
     pbar = tqdm(range(args.n_iter))
 
     for i in pbar:
-        X_mb, t_mb = fmnist.train.next_batch(m)
+        X_mb, t_mb = mnist.train.next_batch(m)
         X_mb, t_mb = torch.from_numpy(X_mb).cuda(), torch.from_numpy(t_mb).long().cuda()
 
         if not args.use_dropout:
@@ -213,41 +226,27 @@ else:
 
 # Save model
 if not args.load:
-    torch.save(model.state_dict(), f'models/fmnist/model_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{args.lam}_{S}.bin')
+    torch.save(model.state_dict(), f'models/mnist/model_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{args.lam}_{S}.bin')
 
 
 """ ======================= Out-of-distribution experiments ======================= """
 
 model.eval()
 
-# Test on FMNIST
-X_test_FMNIST = torch.from_numpy(fmnist.test.images).float().cuda()
-t_test_FMNIST = fmnist.test.labels
-
-# Test on flipped FMNIST
-flippedud = np.stack([np.flipud(x.reshape(28, 28)).ravel() for x in fmnist.test.images])
-flippedlr = np.stack([np.fliplr(x.reshape(28, 28)).ravel() for x in fmnist.test.images])
-X_test_FMNIST_ud = torch.from_numpy(flippedud).float().cuda()
-X_test_FMNIST_lr = torch.from_numpy(flippedlr).float().cuda()
-
 # Test on MNIST
-mnist = input_data.read_data_sets('MNIST_data', one_hot=False)
-X_test_MNIST = torch.from_numpy(mnist.test.images).cuda()
+X_test_MNIST = torch.from_numpy(mnist.test.images).float().cuda()
 t_test_MNIST = mnist.test.labels
 
 # Also test on notMNIST
 notMNIST = scipy.io.loadmat('notMNIST_small.mat')
 notMNIST_img = notMNIST['images'].reshape(784, -1).T / 255  # Normalize
 assert notMNIST_img.shape == (notMNIST['images'].shape[-1], 784)
+
 X_test_notMNIST = torch.from_numpy(notMNIST_img).float().cuda()
 t_test_notMNIST = notMNIST['labels']
 
 
-
 def test(X_test, m=args.batch_size):
-    """
-    Return the predictive distribution wrt. test data.
-    """
     M = X_test.size(0)
     y = []
 
@@ -260,18 +259,24 @@ def test(X_test, m=args.batch_size):
     return y
 
 
+def get_test_weight_params(X_test, m=args.batch_size):
+    M = X_test.size(0)
+    Mean = 0
+
+    for i in range(0, M, m):
+        W1_params_m, W2_params_m = model.get_weight_params(X_test[i:i+m])
+        Ms = torch.cat([W1_params_m[0].flatten(1), W2_params_m[0].flatten(1)], dim=1)
+        Mean += 1/M * Ms.sum(0).cpu().data.numpy()
+
+    return Mean
+
+
 y_val = 0
-y_FMNIST = 0
-y_FMNIST_ud = 0
-y_FMNIST_lr = 0
 y_MNIST = 0
 y_notMNIST = 0
 
 for _ in tqdm(range(args.n_samples)):
     y_val += 1/args.n_samples * test(X_valid)
-    y_FMNIST += 1/args.n_samples * test(X_test_FMNIST)
-    y_FMNIST_ud += 1/args.n_samples * test(X_test_FMNIST_ud)
-    y_FMNIST_lr += 1/args.n_samples * test(X_test_FMNIST_lr)
     y_MNIST += 1/args.n_samples * test(X_test_MNIST)
     y_notMNIST += 1/args.n_samples * test(X_test_notMNIST)
 
@@ -279,26 +284,14 @@ for _ in tqdm(range(args.n_samples)):
 acc = np.mean(y_val.argmax(1) == t_valid)
 print(f'Validation accuracy on MNIST: {acc:.3f}')
 
-acc = np.mean(y_FMNIST.argmax(1) == t_test_FMNIST)
-print(f'Test accuracy on FMNIST: {acc:.3f}')
-
-acc = np.mean(y_FMNIST_ud.argmax(1) == t_test_FMNIST)
-print(f'Test accuracy on FMNIST_ud: {acc:.3f}')
-
-acc = np.mean(y_FMNIST_lr.argmax(1) == t_test_FMNIST)
-print(f'Test accuracy on FMNIST_lr: {acc:.3f}')
-
 acc = np.mean(y_MNIST.argmax(1) == t_test_MNIST)
 print(f'Test accuracy on MNIST: {acc:.3f}')
 
 acc = np.mean(y_notMNIST.argmax(1) == t_test_notMNIST)
 print(f'Test accuracy on notMNIST: {acc:.3f}')
 
-np.save(f'results/fmnist/y_test_fmnist_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{args.lam}_{S}.npy', y_FMNIST)
-np.save(f'results/fmnist/y_test_fmnist_ud_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{args.lam}_{S}.npy', y_FMNIST_ud)
-np.save(f'results/fmnist/y_test_fmnist_lr_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{S}.npy', y_FMNIST_lr)
-np.save(f'results/fmnist/y_test_mnist_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{S}.npy', y_MNIST)
-np.save(f'results/fmnist/y_test_notmnist_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{S}.npy', y_notMNIST)
+np.save(f'results/mnist/y_test_mnist_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{args.lam}_{S}.npy', y_MNIST)
+np.save(f'results/mnist/y_test_notmnist_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{args.lam}_{S}.npy', y_notMNIST)
 
 
 """ ======================= Adversarial examples experiments ======================= """
@@ -313,8 +306,8 @@ x_op = tf.placeholder(tf.float32, shape=(None, 784))
 tf_model_fn = convert_pytorch_model_to_tf(model, out_dims=10)
 cleverhans_model = CallableModelWrapper(tf_model_fn, output_layer='logits')
 
-X_test = fmnist.test.images
-y_test = fmnist.test.labels
+X_test = mnist.test.images
+y_test = mnist.test.labels
 
 M = X_test.shape[0]
 
@@ -370,5 +363,5 @@ for eps in np.arange(0, 1.01, 0.1):
 sess.close()
 
 # Save data
-np.save(f'results/fmnist/accs_adv_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{S}_{args.wd}_{args.lam}_{args.adv_samples}.npy', adv_accs)
-np.save(f'results/fmnist/ents_adv_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{S}_{args.wd}_{args.lam}_{args.adv_samples}.npy', adv_ents)
+np.save(f'results/mnist/accs_adv_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{args.lam}_{S}_{args.adv_samples}.npy', adv_accs)
+np.save(f'results/mnist/ents_adv_{name}_{h_dim}_{h_dim_hypernet}_{m}_{lr}_{args.wd}_{args.lam}_{S}_{args.adv_samples}.npy', adv_ents)

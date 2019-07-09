@@ -10,6 +10,7 @@ import input_data
 import argparse
 from tqdm import tqdm
 import math
+import os
 
 import tensorflow as tf
 from cleverhans.attacks import FastGradientMethod
@@ -44,8 +45,8 @@ name = 'mlcdn'
 if args.use_dropout:
     name = 'dropout'
 
-os.makedirs('/results/mnist', exist_ok=True)
-os.makedirs('/models/mnist', exist_ok=True)
+os.makedirs('./results/mnist', exist_ok=True)
+os.makedirs('./models/mnist', exist_ok=True)
 
 # Load training data
 mnist = input_data.read_data_sets('MNIST_data', one_hot=False)
@@ -93,6 +94,8 @@ class ProbHypernet(nn.Module):
         M = mu_scaling.view(m, r, 1) * M  # Broadcasted: M is (m, r, c)
         var_r = torch.exp(logvar_r)
         var_c = torch.exp(logvar_c)
+
+        print(M.shape, var_r.shape, var_c.shape)
 
         E = torch.randn(m, r, c, device='cuda')
 

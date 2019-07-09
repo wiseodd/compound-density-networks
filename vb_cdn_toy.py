@@ -30,8 +30,8 @@ args = parser.parse_args()
 
 name = 'vbcdn'
 
-os.makedirs('/results/toy/{args.dataset}', exist_ok=True)
-os.makedirs('/models/toy/{args.dataset}', exist_ok=True)
+os.makedirs('./results/toy/{args.dataset}', exist_ok=True)
+os.makedirs('./models/toy/{args.dataset}', exist_ok=True)
 
 np.random.seed(args.randseed)
 torch.manual_seed(args.randseed)

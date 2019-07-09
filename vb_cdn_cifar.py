@@ -13,6 +13,7 @@ from tqdm import tqdm
 import data_loader
 import itertools
 import math
+import os
 
 import tensorflow as tf
 from cleverhans.attacks import FastGradientMethod
@@ -40,8 +41,8 @@ torch.manual_seed(args.randseed)
 
 name = 'vbcdn'
 
-os.makedirs('/results/cifar', exist_ok=True)
-os.makedirs('/models/cifar', exist_ok=True)
+os.makedirs('./results/cifar', exist_ok=True)
+os.makedirs('./models/cifar', exist_ok=True)
 
 # Load training data
 trainset, testset = data_loader.load_dataset('cifar10_pretrained')

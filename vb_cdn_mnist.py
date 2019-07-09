@@ -9,6 +9,7 @@ import input_data
 import argparse
 import math
 from tqdm import tqdm
+import os
 
 import tensorflow as tf
 from cleverhans.attacks import FastGradientMethod
@@ -37,8 +38,8 @@ torch.manual_seed(args.randseed)
 
 name = 'vbcdn'
 
-os.makedirs('/results/mnist', exist_ok=True)
-os.makedirs('/models/mnist', exist_ok=True)
+os.makedirs('./results/mnist', exist_ok=True)
+os.makedirs('./models/mnist', exist_ok=True)
 
 # Load data
 mnist = input_data.read_data_sets('MNIST_data', one_hot=False)

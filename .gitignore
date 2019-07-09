@@ -116,3 +116,6 @@ dmypy.json
 .pyre/
 
 .DS_Store
+
+FMNIST_data/
+MNIST_data/
