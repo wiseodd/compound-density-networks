@@ -123,7 +123,7 @@ class ProbHypernet(nn.Module):
         var_h = XRX.unsqueeze(-1) * var_c
 
         eps = torch.randn(m, c, device='cuda')
-        h = mean_h + eps * var_h
+        h = mean_h + eps * torch.sqrt(var_h)
 
         if output_weight_params:
             return h, D_KL, (M, var_r, var_c)
